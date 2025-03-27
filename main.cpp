@@ -32,6 +32,8 @@ struct State
 {
     int16_t analog = 0;
     int16_t last_valid_value = 0; // Armazena o último valor válido
+    const int COIL_LIGAR = 0;   // Endereço do coil para ligar
+    const int COIL_DESLIGAR = 1; // Endereço do coil para desligar
 };
 
 // Função para adicionar atualizações ao outstation DNP3
@@ -59,6 +61,49 @@ bool ReadModbusValues(modbus_t* ctx, State& state)
 
     return true;
 }
+
+
+// Função para escrever em coils do Modbus
+bool WriteModbusCoils(modbus_t* ctx, State& state)
+{
+    // Verifica o valor analógico e controla os coils
+    if (state.analog == 1024) {
+        // LIGAR - Usa state.COIL_LIGAR para acessar o endereço
+        std::cout << "Enviando comando LIGAR (coil " << state.COIL_LIGAR << ")..." << std::endl;
+        if (modbus_write_bit(ctx, state.COIL_LIGAR, true) == -1) {
+            std::cerr << "Erro ao ligar: " << modbus_strerror(errno) << std::endl;
+            return false;
+        }
+        std::cout << "Comando LIGAR enviado com sucesso!" << std::endl;
+        
+        // Verificação opcional
+        uint8_t estado;
+        if (modbus_read_bits(ctx, state.COIL_LIGAR, 1, &estado) != -1) {
+            std::cout << "Estado do coil: " << (estado ? "ATIVO" : "INATIVO") << std::endl;
+        }
+    } 
+    else if (state.analog == 0) {
+        // DESLIGAR - Usa state.COIL_DESLIGAR para acessar o endereço
+        std::cout << "Enviando comando DESLIGAR (coil " << state.COIL_DESLIGAR << ")..." << std::endl;
+        if (modbus_write_bit(ctx, state.COIL_DESLIGAR, true) == -1) {
+            std::cerr << "Erro ao desligar: " << modbus_strerror(errno) << std::endl;
+            return false;
+        }
+        std::cout << "Comando DESLIGAR enviado com sucesso!" << std::endl;
+        
+        // Verificação opcional
+        uint8_t estado;
+        if (modbus_read_bits(ctx, state.COIL_DESLIGAR, 1, &estado) != -1) {
+            std::cout << "Estado do coil: " << (estado ? "ATIVO" : "INATIVO") << std::endl;
+        }
+    }
+    else {
+        std::cout << "Valor analógico intermediário (" << state.analog << "), nenhuma ação tomada." << std::endl;
+    }
+    
+    return true;
+}
+
 
 int main(int argc, char* argv[])
 {
@@ -138,8 +183,11 @@ int main(int argc, char* argv[])
             outstation->Apply(builder.Build());
 
             std::cout << "Valores atualizados: Analog = " << state.analog << std::endl;
+        // Controle do LED baseado no valor analógico
+        if (!WriteModbusCoils(ctx, state)) {
+            std::cerr << "Falha no controle dos coils" << std::endl;
         }
-
+        }
         // Aguarda 1 segundo antes da próxima leitura
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
