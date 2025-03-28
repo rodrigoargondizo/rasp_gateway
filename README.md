@@ -1,4 +1,6 @@
-# gateway_modbus_tcp_dnp3
-Projeto de TCC - Engenharia de Controle e Automação UFU
+# Gateway Modbus TCP/DNP3
+Projeto de TCC - Engenharia de Controle e Automação (UFU)
 
-Consiste em um gateway que comunica com dispositivos escravos, Modbus TCP e transmite os dados via protocolo DNP3.
+Descrição:
+Este projeto consiste no desenvolvimento de um gateway embarcado capaz de se comunicar com dispositivos Modbus TCP e transmitir os dados utilizando o protocolo DNP3.
+O objetivo é integrar equipamentos industriais em sistemas SCADA, otimizando a interoperabilidade entre diferentes protocolos.
