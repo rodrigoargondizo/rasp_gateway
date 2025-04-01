@@ -25,6 +25,8 @@ DatabaseConfig ConfigureDatabase()
     
     // Adiciona 1 ponto binário de saída (para comandos)
     config.binary_output_status[0] = BOStatusConfig();
+    config.binary_output_status[0].clazz = PointClass::Class1;
+
 
     return config;
 }
