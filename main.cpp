@@ -35,12 +35,12 @@ DatabaseConfig ConfigureDatabase()
 
     
     // Ponto 0 (índice 0) - Comando para LIGAR o LED
-    config.binary_output_status[0] = BOStatusConfig();
-    config.binary_output_status[0].clazz = PointClass::Class1; // Ponto de classe 1 (para eventos)
+    //config.binary_output_status[0] = BOStatusConfig();
+   //config.binary_output_status[0].clazz = PointClass::Class1; // Ponto de classe 1 (para eventos)
     
     // Ponto 1 (índice 1) - Comando para DESLIGAR o LED
-    config.binary_output_status[1] = BOStatusConfig();
-    config.binary_output_status[1].clazz = PointClass::Class1;
+    //config.binary_output_status[1] = BOStatusConfig();
+    //config.binary_output_status[1].clazz = PointClass::Class1;
 
     return config;
 }
