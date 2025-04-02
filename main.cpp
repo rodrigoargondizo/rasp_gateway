@@ -11,16 +11,22 @@
 #include <thread>
 #include <chrono>
 
+using namespace std;
 using namespace opendnp3;
 
-
 // Estrutura para armazenar os valores lidos do Modbus
-struct State
-{
-    //int16_t analog = 0;
-    //int16_t last_valid_value = 0; // Armazena o último valor válido
+struct State {
+    // Para o valor analógico
+    int16_t analog = 0;
+    int16_t last_valid_value = 0; // Armazena o último valor válido
     const int COIL_LIGAR = 0;   // Endereço do coil para ligar
     const int COIL_DESLIGAR = 1; // Endereço do coil para desligar
+        
+    // Para o status de conexão
+    bool modbus_connected = false;
+    bool last_connection_state = false;
+    int failure_count = 0;
+    const int max_failures_before_zero = 5;
 };
 
 //Estrutura para configurar os pontos DNP3
@@ -28,19 +34,21 @@ DatabaseConfig ConfigureDatabase()
 {
     DatabaseConfig config; // Inicializa um DatabaseConfig vazio
 
-    //Adiciona apenas um ponto analógico com índice 0
-    //config.analog_input[0] = AnalogConfig();
-    //config.analog_input[0].clazz = PointClass::Class2;
-    //config.analog_input[0].svariation = StaticAnalogVariation::Group30Var2;
+    // Ponto analógico (valor do Potenciometro do escravo Modbus) - índice 0
+    config.analog_input[0] = AnalogConfig();
+    config.analog_input[0].clazz = PointClass::Class2;
+    config.analog_input[0].svariation = StaticAnalogVariation::Group30Var2;
 
-    
-    // Ponto 0 (índice 0) - Comando para LIGAR o LED
-    //config.binary_output_status[0] = BOStatusConfig();
-   //config.binary_output_status[0].clazz = PointClass::Class1; // Ponto de classe 1 (para eventos)
-    
-    // Ponto 1 (índice 1) - Comando para DESLIGAR o LED
-    //config.binary_output_status[1] = BOStatusConfig();
-    //config.binary_output_status[1].clazz = PointClass::Class1;
+
+    // Ponto binário (status da conexão) - índice 0
+    config.binary_input[0] = BinaryConfig();
+    config.binary_input[0].clazz = PointClass::Class1;
+    config.binary_input[0].svariation = StaticBinaryVariation::Group1Var2;
+
+    // Ponto binário (status da do LED) - índice 1
+    config.binary_input[1] = BinaryConfig();
+    config.binary_input[1].clazz = PointClass::Class1;
+    config.binary_input[1].svariation = StaticBinaryVariation::Group1Var2;
 
     return config;
 }
