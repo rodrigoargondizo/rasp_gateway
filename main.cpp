@@ -1,8 +1,11 @@
+#include <opendnp3/ConsoleLogger.h>
 #include <opendnp3/DNP3Manager.h>
+#include <opendnp3/logging/LogLevels.h>
+#include <opendnp3/outstation/DefaultOutstationApplication.h>
+#include <opendnp3/outstation/IUpdateHandler.h>
+#include <opendnp3/outstation/UpdateBuilder.h>
 #include <opendnp3/outstation/OutstationStackConfig.h>
 #include <opendnp3/outstation/SimpleCommandHandler.h>
-#include <opendnp3/outstation/DefaultOutstationApplication.h>
-#include <opendnp3/ConsoleLogger.h>
 #include <opendnp3/channel/IPEndpoint.h>
 #include <opendnp3/channel/PrintingChannelListener.h>
 #include <modbus/modbus.h>
@@ -51,6 +54,96 @@ DatabaseConfig ConfigureDatabase()
     config.binary_input[1].svariation = StaticBinaryVariation::Group1Var2;
 
     return config;
+}
+
+//Estrutura que atualiza os valores Modbus nos pontos DNP3
+void AddUpdates(UpdateBuilder& builder, State& state) {
+    // Atualiza o valor analógico (índice 0)
+    if (state.failure_count >= state.max_failures_before_zero) {
+        builder.Update(Analog(0), 0);
+    } else {
+        builder.Update(Analog(state.last_valid_value), 0);
+    }
+    
+    // Atualiza o status binário (índice 0)
+    // true = falha de conexão, false = conexão OK
+    bool connection_failed = !state.modbus_connected;
+    builder.Update(Binary(connection_failed), 0);
+    
+    // Se o status mudou, envia como evento com flag de qualidade
+    if (state.modbus_connected != state.last_connection_state) {
+        builder.Update(Binary(connection_failed, Flags(0x01)), 0);
+        state.last_connection_state = state.modbus_connected;
+    }
+}
+
+//Função que tenta reconectar aos dispositivos Modbus em caso de falha
+bool TryModbusReconnect(modbus_t* ctx, const char* ip, int port, int slave_id, State& state) {
+    cout << "Tentando reconectar ao Modbus..." << endl;
+    
+    if (state.modbus_connected) {
+        modbus_close(ctx);
+        state.modbus_connected = false;
+    }
+
+    if (ctx == nullptr) {
+        ctx = modbus_new_tcp(ip, port);
+        if (ctx == nullptr) {
+            cerr << "Falha ao criar novo contexto Modbus" << endl;
+            return false;
+        }
+        modbus_set_response_timeout(ctx, 1, 0);
+        modbus_set_byte_timeout(ctx, 1, 0);
+    }
+
+    if (modbus_set_slave(ctx, slave_id) == -1) {
+        cerr << "Erro ao configurar ID do escravo: " << modbus_strerror(errno) << endl;
+        modbus_free(ctx);
+        return false;
+    }
+
+    if (modbus_connect(ctx) == -1) {
+        cerr << "Falha na reconexão: " << modbus_strerror(errno) << endl;
+        return false;
+    }
+
+    state.modbus_connected = true;
+    cout << "Conexão Modbus restabelecida!" << endl;
+    return true;
+}
+
+//Função de Leitura dos Pontos Modbus
+bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, State& state) {
+    uint16_t tab_reg[1];
+    
+    if (!state.modbus_connected) {
+        if (!TryModbusReconnect(ctx, ip, port, slave_id, state)) {
+            state.failure_count++;
+            return false;
+        }
+    }
+
+    modbus_flush(ctx);
+    int rc = modbus_read_registers(ctx, 0, 1, tab_reg);
+    
+    if (rc == -1) {
+        cerr << "Erro na leitura: " << modbus_strerror(errno) << endl;
+        modbus_close(ctx);
+        state.modbus_connected = false;
+        state.failure_count++;
+        return false;
+    }
+
+    state.analog = static_cast<int16_t>(tab_reg[0]);
+    state.last_valid_value = state.analog;
+    state.failure_count = 0;
+    return true;
+}
+
+volatile sig_atomic_t shutdown_flag = 0;
+
+void signal_handler(int signal) {
+    shutdown_flag = 1;
 }
 
 // Função para ligar dispositivo Modbus
@@ -111,8 +204,16 @@ public:
 
 int main() {
 
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    // Configuração Modbus
+    const char* modbus_ip = "192.168.100.120";
+    const int modbus_port = 502;
+    const int modbus_slave_id = 1;
+
     // Inicializa o contexto Modbus
-    modbus_t *ctx = modbus_new_tcp("192.168.100.120", 502); // Substitua pelo IP e porta do seu dispositivo
+    modbus_t* ctx = modbus_new_tcp(modbus_ip, modbus_port); // Substitua pelo IP e porta do seu dispositivo
     if (ctx == nullptr)
     {
         std::cerr << "Erro ao criar contexto Modbus: " << modbus_strerror(errno) << std::endl;
@@ -170,10 +271,6 @@ int main() {
 	
     config.link.KeepAliveTimeout = TimeDuration::Seconds(30);
 
-    //Outstation com manipulador de comando Direct Operate
-    //auto outstation = channel->AddOutstation("outstation", std::make_shared<DirectOperateOnlyHandler>(),
-    //                                         DefaultOutstationApplication::Create(), config);
-
     //Outstation com manipulador de comando Direct Operate integrado com Modbus
     auto outstation = channel->AddOutstation(
         "outstation", 
@@ -185,16 +282,35 @@ int main() {
     outstation->Enable();
 
     // Loop principal
-    while (true)
-    {
-        // Aguarda 1 segundo antes da próxima leitura
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+    while (!shutdown_flag) {
+        bool read_success = ReadModbusValues(ctx, modbus_ip, modbus_port, modbus_slave_id, state);
+
+        UpdateBuilder builder;
+        AddUpdates(builder, state);
+        outstation->Apply(builder.Build());
+
+        // Log de status
+        if (!read_success) {
+            if (state.failure_count >= state.max_failures_before_zero) {
+                cout << "Falha prolongada - Enviando 0 (Status: FALHA)" << endl;
+            } else {
+                cout << "Falha temporária - Último valor válido: " 
+                     << state.last_valid_value << " (Status: FALHA)" << endl;
+            }
+        } else {
+            cout << "Leitura OK - Valor atual: " << state.analog 
+                 << " (Status: CONECTADO)" << endl;
+        }
+
+        this_thread::sleep_for(chrono::seconds(1));
     }
 
-// Fecha a conexão Modbus e libera o contexto
-modbus_close(ctx);
-modbus_free(ctx);
+    // Limpeza
+    if (state.modbus_connected) {
+        modbus_close(ctx);
+    }
+    modbus_free(ctx);
 
-std::cout << "Encerrando programa..." << std::endl;
-return 0;
+    cout << "Encerrando programa..." << endl;
+    return 0;
 }
