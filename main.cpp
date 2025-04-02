@@ -21,9 +21,11 @@ using namespace opendnp3;
 struct State {
     // Para o valor analógico
     int16_t analog = 0;
+    bool led_status = 0;
     int16_t last_valid_value = 0; // Armazena o último valor válido
     const int COIL_LIGAR = 0;   // Endereço do coil para ligar
     const int COIL_DESLIGAR = 1; // Endereço do coil para desligar
+    const int COIL_STATUS_LED = 2; // Endereço do coil de status do LED
         
     // Para o status de conexão
     bool modbus_connected = false;
@@ -75,6 +77,9 @@ void AddUpdates(UpdateBuilder& builder, State& state) {
         builder.Update(Binary(connection_failed, Flags(0x01)), 0);
         state.last_connection_state = state.modbus_connected;
     }
+
+    // Atualiza o status binário do LED (índice 1)
+    builder.Update(Binary(state.led_status), 1);
 }
 
 //Função que tenta reconectar aos dispositivos Modbus em caso de falha
@@ -115,6 +120,7 @@ bool TryModbusReconnect(modbus_t* ctx, const char* ip, int port, int slave_id, S
 //Função de Leitura dos Pontos Modbus
 bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, State& state) {
     uint16_t tab_reg[1];
+    uint8_t coil_status;
     
     if (!state.modbus_connected) {
         if (!TryModbusReconnect(ctx, ip, port, slave_id, state)) {
@@ -134,8 +140,20 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
         return false;
     }
 
+    // Lê o status do LED (coil 2)
+    rc = modbus_read_bits(ctx, state.COIL_STATUS_LED, 1, &coil_status);
+    
+    if (rc == -1) {
+        cerr << "Erro na leitura do coil do LED: " << modbus_strerror(errno) << endl;
+        modbus_close(ctx);
+        state.modbus_connected = false;
+        state.failure_count++;
+        return false;
+    }
+
     state.analog = static_cast<int16_t>(tab_reg[0]);
     state.last_valid_value = state.analog;
+    state.led_status = (coil_status == 1); // Converte para bool (true = ligado)
     state.failure_count = 0;
     return true;
 }
