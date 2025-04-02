@@ -22,10 +22,12 @@ struct State {
     // Para o valor analógico
     int16_t analog = 0;
     bool led_status = 0;
+    bool button_status = 0;
     int16_t last_valid_value = 0; // Armazena o último valor válido
     const int COIL_LIGAR = 0;   // Endereço do coil para ligar
     const int COIL_DESLIGAR = 1; // Endereço do coil para desligar
     const int COIL_STATUS_LED = 2; // Endereço do coil de status do LED
+    const int COIL_STATUS_BUTTON = 3; // (Estado do botão - Lógica invertida: 1=botão solto, 0=botão pressionado)
         
     // Para o status de conexão
     bool modbus_connected = false;
@@ -50,10 +52,15 @@ DatabaseConfig ConfigureDatabase()
     config.binary_input[0].clazz = PointClass::Class1;
     config.binary_input[0].svariation = StaticBinaryVariation::Group1Var2;
 
-    // Ponto binário (status da do LED) - índice 1
+    // Ponto binário (status do LED) - índice 1
     config.binary_input[1] = BinaryConfig();
     config.binary_input[1].clazz = PointClass::Class1;
     config.binary_input[1].svariation = StaticBinaryVariation::Group1Var2;
+
+    // Ponto binário (status do Botao) - índice 2
+    config.binary_input[2] = BinaryConfig();
+    config.binary_input[2].clazz = PointClass::Class1;
+    config.binary_input[2].svariation = StaticBinaryVariation::Group1Var2;
 
     return config;
 }
@@ -80,6 +87,9 @@ void AddUpdates(UpdateBuilder& builder, State& state) {
 
     // Atualiza o status binário do LED (índice 1)
     builder.Update(Binary(state.led_status), 1);
+
+    // Atualiza o status binário do LED (índice 2)
+    builder.Update(Binary(state.button_status), 2);
 }
 
 //Função que tenta reconectar aos dispositivos Modbus em caso de falha
@@ -120,7 +130,7 @@ bool TryModbusReconnect(modbus_t* ctx, const char* ip, int port, int slave_id, S
 //Função de Leitura dos Pontos Modbus
 bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, State& state) {
     uint16_t tab_reg[1];
-    uint8_t coil_status;
+    uint8_t led_status, button_status;
     
     if (!state.modbus_connected) {
         if (!TryModbusReconnect(ctx, ip, port, slave_id, state)) {
@@ -133,7 +143,7 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
     int rc = modbus_read_registers(ctx, 0, 1, tab_reg);
     
     if (rc == -1) {
-        cerr << "Erro na leitura: " << modbus_strerror(errno) << endl;
+        cerr << "Erro na leitura do potenciometro: " << modbus_strerror(errno) << endl;
         modbus_close(ctx);
         state.modbus_connected = false;
         state.failure_count++;
@@ -141,10 +151,21 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
     }
 
     // Lê o status do LED (coil 2)
-    rc = modbus_read_bits(ctx, state.COIL_STATUS_LED, 1, &coil_status);
+    rc = modbus_read_bits(ctx, state.COIL_STATUS_LED, 1, &led_status);
     
     if (rc == -1) {
-        cerr << "Erro na leitura do coil do LED: " << modbus_strerror(errno) << endl;
+        cerr << "Erro na leitura do status do LED: " << modbus_strerror(errno) << endl;
+        modbus_close(ctx);
+        state.modbus_connected = false;
+        state.failure_count++;
+        return false;
+    }
+
+        // Lê o status do Botao (coil 3)
+    rc = modbus_read_bits(ctx, state.COIL_STATUS_BUTTON, 1, &button_status);
+    
+    if (rc == -1) {
+        cerr << "Erro na leitura do coil do Botao: " << modbus_strerror(errno) << endl;
         modbus_close(ctx);
         state.modbus_connected = false;
         state.failure_count++;
@@ -153,7 +174,8 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
 
     state.analog = static_cast<int16_t>(tab_reg[0]);
     state.last_valid_value = state.analog;
-    state.led_status = (coil_status == 1); // Converte para bool (true = ligado)
+    state.led_status = (led_status == 1); // Converte para bool (true = ligado)
+    state.button_status = !(button_status == 1); // Converte para bool (true = ligado)
     state.failure_count = 0;
     return true;
 }
@@ -232,10 +254,18 @@ int main() {
 
     // Inicializa o contexto Modbus
     modbus_t* ctx = modbus_new_tcp(modbus_ip, modbus_port); // Substitua pelo IP e porta do seu dispositivo
-    if (ctx == nullptr)
-    {
-        std::cerr << "Erro ao criar contexto Modbus: " << modbus_strerror(errno) << std::endl;
-        return -1;
+
+    // Loop infinito para tentar conectar até o sucesso
+    while (!shutdown_flag) {
+        if (modbus_connect(ctx) == -1) {
+            std::cerr << "Erro ao conectar ao dispositivo: " << modbus_strerror(errno) << std::endl;
+            std::cerr << "Tentando novamente em 5 segundos..." << std::endl;
+            
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        } else {
+            std::cout << "Conexão Modbus estabelecida com sucesso!" << std::endl;
+            break;  // Sai do loop se a conexão for bem-sucedida
+        }
     }
 
     // Define o ID do escravo Modbus
@@ -301,6 +331,7 @@ int main() {
 
     // Loop principal
     while (!shutdown_flag) {
+
         bool read_success = ReadModbusValues(ctx, modbus_ip, modbus_port, modbus_slave_id, state);
 
         UpdateBuilder builder;
