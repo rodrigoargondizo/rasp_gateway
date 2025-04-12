@@ -1,55 +1,55 @@
 /**
  * @file Escravo_Modbus_ESP8266.ino
- * @brief Implementação de um dispositivo escravo Modbus-TCP com ESP8266
+ * @brief Implementacao de um dispositivo escravo Modbus-TCP com ESP8266
  * 
- * Este código configura um ESP8266 como um dispositivo escravo Modbus-TCP que:
+ * Este codigo configura um ESP8266 como um dispositivo escravo Modbus-TCP que:
  * - Liga e desliga um LED via coils Modbus
- * - Lê um potenciômetro e disponibiliza via registrador holding
- * - Lê um botão físico com debounce e disponibiliza via coil
+ * - Le um potenciometro e disponibiliza via registrador holding
+ * - Le um botao fisico com debounce e disponibiliza via coil
  */
 
  #include <Arduino.h>
  #include <ESP8266WiFi.h>
  #include <ModbusIP_ESP8266.h>
  
- // ========== CONFIGURAÇÃO DE REDE ==========
- const IPAddress ip(192, 168, 100, 120);      // IP estático do dispositivo
- const IPAddress gateway(192, 168, 100, 1);    // Gateway da rede
- const IPAddress subnet(255, 255, 255, 0);     // Máscara de sub-rede
- const char* ssid = "casa.exe";                // Nome da rede WiFi
- const char* password = "AfxJ457T";            // Senha da rede WiFi
+ // ========== CONFIGURACAO DE REDE ==========
+ const IPAddress ip(192, 168, 100, 120);      // IP estatico do dispositivo
+ const IPAddress gateway(192, 168, 100, 1);   // Gateway da rede
+ const IPAddress subnet(255, 255, 255, 0);    // Mascara de sub-rede
+ const char* ssid = "casa.exe";               // Nome da rede WiFi
+ const char* password = "AfxJ457T";           // Senha da rede WiFi
  
- // ========== ENDEREÇOS MODBUS (0-based) ==========
- const uint16_t COIL_LIGAR = 0;       // Endereço 00001 - Coil para comando de ligar
- const uint16_t COIL_DESLIGAR = 1;    // Endereço 00002 - Coil para comando de desligar
- const uint16_t COIL_STATUS_LED = 2;  // Endereço 00003 - Coil de status do LED (leitura)
- const uint16_t COIL_BOTAO_D0 = 3;    // Endereço 00004 - Estado do botão (lógica invertida)
- const uint16_t HREG_POT = 0;         // Endereço 40001 - Registrador holding para potenciômetro
+ // ========== ENDERECOS MODBUS (0-based) ==========
+ const uint16_t COIL_LIGAR = 0;       // Endereco 00001 - Coil para comando de ligar
+ const uint16_t COIL_DESLIGAR = 1;    // Endereco 00002 - Coil para comando de desligar
+ const uint16_t COIL_STATUS_LED = 2;  // Endereco 00003 - Coil de status do LED (leitura)
+ const uint16_t COIL_BOTAO_D0 = 3;    // Endereco 00004 - Estado do botao (logica invertida)
+ const uint16_t HREG_POT = 0;         // Endereco 40001 - Registrador holding para potenciometro
  
  // ========== PINAGEM ==========
- const uint8_t LED_PIN = D2;          // Pino do LED (saída)
- const uint8_t POT_PIN = A0;          // Pino analógico do potenciômetro
- const uint8_t BUTTON_PIN = D0;       // Pino digital do botão (entrada com pull-up)
+ const uint8_t LED_PIN = D2;          // Pino do LED (saida)
+ const uint8_t POT_PIN = A0;          // Pino analogico do potenciometro
+ const uint8_t BUTTON_PIN = D0;       // Pino digital do botao (entrada com pull-up)
  
  ModbusIP mb;  // Objeto ModbusIP
  
- // ========== VARIÁVEIS PARA DEBOUNCE DO BOTÃO ==========
- bool lastButtonState = HIGH;          // Último estado estável do botão
- unsigned long lastDebounceTime = 0;   // Tempo do último cambio de estado
+ // ========== VARIAVEIS PARA DEBOUNCE DO BOTAO ==========
+ bool lastButtonState = HIGH;          // Ultimo estado estavel do botao
+ unsigned long lastDebounceTime = 0;   // Tempo do ultimo cambio de estado
  const unsigned long debounceDelay = 50;  // Tempo de debounce em ms
  
  /**
-  * @brief Configuração inicial do dispositivo
+  * @brief Configuracao inicial do dispositivo
   */
  void setup() {
      Serial.begin(115200);
      
-     // Configuração dos pinos
+     // Configuracao dos pinos
      pinMode(LED_PIN, OUTPUT);
      digitalWrite(LED_PIN, LOW);           // Inicia com LED desligado
-     pinMode(BUTTON_PIN, INPUT_PULLUP);    // Configura botão com resistor pull-up interno
+     pinMode(BUTTON_PIN, INPUT_PULLUP);    // Configura botao com resistor pull-up interno
  
-     // Conexão WiFi
+     // Conexao WiFi
      WiFi.config(ip, gateway, subnet);
      WiFi.begin(ssid, password);
      while (WiFi.status() != WL_CONNECTED) {
@@ -58,15 +58,15 @@
      }
      Serial.println("\nConectado! IP: " + WiFi.localIP().toString());
  
-     // Configuração do servidor Modbus
+     // Configuracao do servidor Modbus
      mb.server();  // Inicia o servidor Modbus
      
      // Adiciona os registradores Modbus
      mb.addCoil(COIL_LIGAR);         // Coil para comando de ligar
      mb.addCoil(COIL_DESLIGAR);      // Coil para comando de desligar
      mb.addCoil(COIL_STATUS_LED);    // Coil para leitura do status do LED
-     mb.addCoil(COIL_BOTAO_D0);      // Coil para leitura do botão
-     mb.addHreg(HREG_POT);           // Registrador holding para o potenciômetro
+     mb.addCoil(COIL_BOTAO_D0);      // Coil para leitura do botao
+     mb.addHreg(HREG_POT);           // Registrador holding para o potenciometro
  
      /**
       * @brief Callback para escrita na coil de ligar (00001)
@@ -103,22 +103,22 @@
   * @brief Loop principal do programa
   */
  void loop() {
-     mb.task();  // Processa requisições Modbus
+     mb.task();  // Processa requisicoes Modbus
      
-     // Atualiza leitura do potenciômetro a cada 500ms
+     // Atualiza leitura do potenciometro a cada 500ms
      static uint32_t lastUpdate = 0;
      if (millis() - lastUpdate >= 500) {
          lastUpdate = millis();
          uint16_t val = analogRead(POT_PIN);
          
-         // Só atualiza se a diferença for significativa (>5)
+         // So atualiza se a diferenca for significativa (>5)
          if (abs(val - mb.Hreg(HREG_POT)) > 5) {
              mb.Hreg(HREG_POT, val);  // Atualiza registrador holding
              Serial.println("Pot: " + String(val));
          }
      }
  
-     // Leitura do botão com debounce
+     // Leitura do botao com debounce
      bool reading = digitalRead(BUTTON_PIN);
      
      // Se o estado mudou, reinicia o timer de debounce
@@ -126,13 +126,14 @@
          lastDebounceTime = millis();
      }
      
-     // Se passou tempo suficiente desde a última mudança
+     // Se passou tempo suficiente desde a ultima mudanca
      if ((millis() - lastDebounceTime) > debounceDelay) {
          // Atualiza o registrador Modbus (invertido por causa do PULLUP)
-         // HIGH = botão solto, LOW = botão pressionado
+         // HIGH = botao solto, LOW = botao pressionado
          mb.Coil(COIL_BOTAO_D0, !reading);
      }
      
-     lastButtonState = reading;  // Atualiza o último estado estável
+     lastButtonState = reading;  // Atualiza o ultimo estado estavel
      delay(10);  // Pequeno delay para evitar sobrecarga
  }
+ 
