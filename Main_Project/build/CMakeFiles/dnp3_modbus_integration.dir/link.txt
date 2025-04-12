@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/dnp3_modbus_integration.dir/main.cpp.o -o dnp3_modbus_integration  -lopendnp3 -lmodbus 
