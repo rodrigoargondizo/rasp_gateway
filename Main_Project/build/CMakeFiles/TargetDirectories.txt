@@ -1,0 +1,7 @@
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/dnp3_modbus_integration.dir
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/edit_cache.dir
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/rebuild_cache.dir
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/list_install_components.dir
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/install.dir
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/install/local.dir
+/home/gateway/project_gateway/Main_Project/build/CMakeFiles/install/strip.dir
