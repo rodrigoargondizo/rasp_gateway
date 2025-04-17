@@ -15,16 +15,13 @@
 using namespace std;
 using namespace opendnp3;
 
-// Configuração do banco de dados DNP3
 DatabaseConfig ConfigureDatabase() {
     DatabaseConfig config;
     
-    // Ponto analógico (valor do escravo Modbus)
     config.analog_input[0] = AnalogConfig();
     config.analog_input[0].clazz = PointClass::Class2;
     config.analog_input[0].svariation = StaticAnalogVariation::Group30Var2;
     
-    // Ponto binário (status da conexão) - índice 0
     config.binary_input[0] = BinaryConfig();
     config.binary_input[0].clazz = PointClass::Class1;
     config.binary_input[0].svariation = StaticBinaryVariation::Group1Var2;
@@ -33,11 +30,9 @@ DatabaseConfig ConfigureDatabase() {
 }
 
 struct State {
-    // Para o valor analógico
     int16_t analog = 0;
     int16_t last_valid_value = 0;
     
-    // Para o status de conexão
     bool modbus_connected = false;
     bool last_connection_state = false;
     int failure_count = 0;
@@ -45,19 +40,15 @@ struct State {
 };
 
 void AddUpdates(UpdateBuilder& builder, State& state) {
-    // Atualiza o valor analógico (índice 0)
     if (state.failure_count >= state.max_failures_before_zero) {
         builder.Update(Analog(0), 0);
     } else {
         builder.Update(Analog(state.last_valid_value), 0);
     }
     
-    // Atualiza o status binário (índice 0)
-    // true = falha de conexão, false = conexão OK
     bool connection_failed = !state.modbus_connected;
     builder.Update(Binary(connection_failed), 0);
     
-    // Se o status mudou, envia como evento com flag de qualidade
     if (state.modbus_connected != state.last_connection_state) {
         builder.Update(Binary(connection_failed, Flags(0x01)), 0);
         state.last_connection_state = state.modbus_connected;
@@ -135,7 +126,6 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    // Configuração DNP3
     DNP3Manager manager(1, ConsoleLogger::Create());
     auto channel = manager.AddTCPServer("server", levels::NORMAL, 
                                       ServerAcceptMode::CloseExisting,
@@ -154,7 +144,6 @@ int main(int argc, char* argv[]) {
                                            config);
     outstation->Enable();
 
-    // Configuração Modbus
     const char* modbus_ip = "192.168.100.120";
     const int modbus_port = 502;
     const int modbus_slave_id = 1;
@@ -167,7 +156,6 @@ int main(int argc, char* argv[]) {
     state.modbus_connected = false;
     state.last_connection_state = false;
 
-    // Loop principal
     while (!shutdown_flag) {
         bool read_success = ReadModbusValues(ctx, modbus_ip, modbus_port, modbus_slave_id, state);
 
@@ -175,7 +163,6 @@ int main(int argc, char* argv[]) {
         AddUpdates(builder, state);
         outstation->Apply(builder.Build());
 
-        // Log de status
         if (!read_success) {
             if (state.failure_count >= state.max_failures_before_zero) {
                 cout << "Falha prolongada - Enviando 0 (Status: FALHA)" << endl;
@@ -191,7 +178,6 @@ int main(int argc, char* argv[]) {
         this_thread::sleep_for(chrono::seconds(1));
     }
 
-    // Limpeza
     if (state.modbus_connected) {
         modbus_close(ctx);
     }
