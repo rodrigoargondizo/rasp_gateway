@@ -25,8 +25,8 @@ using namespace std;
 using namespace opendnp3;
 
 #define NUM_SLAVES 3
-#define NUM_HOLDING_REGISTERS 2  // Para o primeiro escravo
-#define NUM_INPUT_REGISTERS 1    // Para os outros escravos
+#define NUM_HOLDING_REGISTERS 2
+#define NUM_INPUT_REGISTERS 1
 
 struct SlaveState {
     int32_t analog_value = 0;
@@ -39,23 +39,12 @@ struct SlaveState {
 DatabaseConfig ConfigureDatabase() {
     DatabaseConfig config;
 
-    // Configura pontos analógicos
     for(int i = 0; i < NUM_SLAVES; i++) {
         config.analog_input[i] = AnalogConfig();
         config.analog_input[i].clazz = PointClass::Class2;
-        
-        // Primeiro escravo (holding register) usa Group30Var1
-        if (i == 0) {
-            config.analog_input[i].svariation = StaticAnalogVariation::Group30Var1;
-        } 
-        // Outros escravos usam Group30Var2
-        else {
-            config.analog_input[i].svariation = StaticAnalogVariation::Group30Var2;
-        }
-    }
+        config.analog_input[i].svariation = (i == 0) ? StaticAnalogVariation::Group30Var1 
+                                                   : StaticAnalogVariation::Group30Var2;
 
-    // Configura pontos binários para status de conexão
-    for (int i = 0; i < NUM_SLAVES; i++) {
         config.binary_input[i] = BinaryConfig();
         config.binary_input[i].clazz = PointClass::Class1;
         config.binary_input[i].svariation = StaticBinaryVariation::Group1Var2;
@@ -67,6 +56,7 @@ DatabaseConfig ConfigureDatabase() {
 typedef struct {
     const char* ip;
     int port;
+    int slave_id;
     int is_first_slave;
     int dnp3_analog_index;
     int dnp3_status_index;
@@ -75,21 +65,9 @@ typedef struct {
 void UpdateDNP3Values(UpdateBuilder& builder, const vector<SlaveState>& slave_states) {
     for (size_t i = 0; i < slave_states.size(); i++) {
         const SlaveState& state = slave_states[i];
-
-        // Atualiza valor analógico
-        if (state.failure_count >= state.max_failures_before_zero) {
-            builder.Update(Analog(0), i);
-        } else {
-            builder.Update(Analog(state.analog_value), i);
-        }
-
-        // Atualiza status de conexão
+        builder.Update(Analog((state.failure_count >= state.max_failures_before_zero) ? 0 : state.analog_value), i);
         bool connection_failed = !state.connection_status;
-        builder.Update(Binary(connection_failed), i);
-
-        if (state.connection_status != state.last_connection_state) {
-            builder.Update(Binary(connection_failed, Flags(0x01)), i);
-        }
+        builder.Update(Binary(connection_failed, (state.connection_status != state.last_connection_state) ? Flags(0x01) : Flags()), i);
     }
 }
 
@@ -97,100 +75,89 @@ void HandleCommunicationFailure(SlaveState& state) {
     state.connection_status = false;
     state.failure_count++;
     if (state.failure_count >= state.max_failures_before_zero) {
-        state.analog_value = 0; // Garante que o valor será 0 no DNP3
+        state.analog_value = 0;
     }
+}
+
+// Função para converter registros Modbus em int32_t considerando sinal
+int32_t modbusRegistersToInt32(uint16_t* regs, bool is_signed) {
+    int32_t value = (regs[0] << 16) | regs[1];
+    if (is_signed && (value & 0x80000000)) {
+        value |= 0xFFFFFFFF00000000; // Estende o sinal para 64 bits
+    }
+    return value;
 }
 
 int main() {
     const auto logLevels = levels::NORMAL | levels::NOTHING;
     DNP3Manager manager(1, ConsoleLogger::Create());
 
-    // Configuração do canal DNP3
-    auto channel = std::shared_ptr<IChannel>(nullptr);
-    try {
-        channel = manager.AddTCPServer("server", logLevels, ServerAcceptMode::CloseExisting,
-                                       IPEndpoint("192.168.100.176", 20000),
-                                       PrintingChannelListener::Create());
-    } catch (const std::exception& e) {
-        std::cerr << "Erro ao configurar canal DNP3: " << e.what() << '\n';
-        return -1;
-    }
+    auto channel = manager.AddTCPServer("server", logLevels, ServerAcceptMode::CloseExisting,
+                                      IPEndpoint("10.1.1.223", 20000),
+                                      PrintingChannelListener::Create());
 
-    // Configuração da pilha DNP3
-    OutstationStackConfig config(ConfigureDatabase());
-    config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
-    config.outstation.params.allowUnsolicited = true;
-    config.link.LocalAddr = 2;
-    config.link.RemoteAddr = 1;
-    config.link.KeepAliveTimeout = TimeDuration::Seconds(30);
+    OutstationStackConfig stackConfig(ConfigureDatabase());
+    stackConfig.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
+    stackConfig.outstation.params.allowUnsolicited = true;
+    stackConfig.link.LocalAddr = 2;
+    stackConfig.link.RemoteAddr = 1;
 
     auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(),
-                                             DefaultOutstationApplication::Create(), config);
+                                           DefaultOutstationApplication::Create(), stackConfig);
     outstation->Enable();
 
-    // Configuração dos escravos Modbus
     SlaveConfig slaves[NUM_SLAVES] = {
-        {"192.168.100.120", 502, 1, 0, 0},  // Primeiro escravo (holding registers)
-        {"192.168.100.121", 502, 0, 1, 1},  // Segundo escravo (input registers)
-        {"192.168.100.122", 502, 0, 2, 2}   // Terceiro escravo (input registers)
+        {"10.1.1.116", 502, 1, 1, 0, 0},  
+        {"10.1.1.41", 502, 1, 0, 1, 1},
+        {"10.1.1.42", 502, 1, 0, 2, 2}
     };
 
-    // Endereços Modbus
-    const int FIRST_HOLDING_REG = 23322 - 1; // Ajuste para offset 0-based
-    const int SECOND_INPUT_REG = 39 - 1;     // Ajuste para offset 0-based
-
+    const int HOLDING_REG_OFFSET = 23322;
+    const int INPUT_REG_OFFSET = 37;
     vector<SlaveState> slave_states(NUM_SLAVES);
-
-    // Buffer para leitura Modbus
-    uint16_t tab_reg[NUM_HOLDING_REGISTERS > NUM_INPUT_REGISTERS ?
-                     NUM_HOLDING_REGISTERS : NUM_INPUT_REGISTERS];
+    uint16_t tab_reg[max(NUM_HOLDING_REGISTERS, NUM_INPUT_REGISTERS)];
 
     while (true) {
         UpdateBuilder builder;
 
         for (int i = 0; i < NUM_SLAVES; ++i) {
             modbus_t* ctx = modbus_new_tcp(slaves[i].ip, slaves[i].port);
-            slave_states[i].connection_status = false;
-
-            if (ctx == NULL) {
-                cerr << "Erro ao criar contexto Modbus" << endl;
+            if (!ctx) {
+                cerr << "Erro ao criar contexto Modbus para " << slaves[i].ip << endl;
                 HandleCommunicationFailure(slave_states[i]);
                 continue;
             }
 
-            // Configura timeout
-            modbus_set_response_timeout(ctx, 1, 0); // 1 segundo
-            modbus_set_byte_timeout(ctx, 1, 0);
+            modbus_set_slave(ctx, slaves[i].slave_id);
+            modbus_set_response_timeout(ctx, 3, 0);
 
             if (modbus_connect(ctx) == -1) {
-                cerr << "Falha na conexão" << endl;
+                cerr << "Falha na conexão com " << slaves[i].ip << endl;
                 modbus_free(ctx);
                 HandleCommunicationFailure(slave_states[i]);
                 continue;
             }
 
-            // Tentativa de leitura
             bool read_success = false;
-            if (slaves[i].is_first_slave) {
-                if (modbus_read_registers(ctx, FIRST_HOLDING_REG, NUM_HOLDING_REGISTERS, tab_reg) != -1) {
+            try {
+                if (slaves[i].is_first_slave) {
+                    int rc = modbus_read_registers(ctx, HOLDING_REG_OFFSET, NUM_HOLDING_REGISTERS, tab_reg);
+                    if (rc == -1) throw modbus_strerror(errno);
                     
+                    // Usa a nova função de conversão que trata valores negativos
+                    slave_states[i].analog_value = modbusRegistersToInt32(tab_reg, true);
+                    cout << "Slave " << i << " (Holding): " << slave_states[i].analog_value << endl;
+                } else {
+                    int rc = modbus_read_input_registers(ctx, INPUT_REG_OFFSET, NUM_INPUT_REGISTERS, tab_reg);
+                    if (rc == -1) throw modbus_strerror(errno);
                     
-                    // Big-endian (padrão Modbus)
-                    //int32_t valor = (tab_reg[0] << 16) | tab_reg[1];
-
-                    // Little-endian (alguns dispositivos)
-                    //int32_t valor = (tab_reg[1] << 16) | tab_reg[0];
-
-                    int32_t valor_combinado = (int32_t)((tab_reg[0] << 16) | tab_reg[1]);
-                    slave_states[i].analog_value = static_cast<int32_t>(valor_combinado);
-                    cout << "Escravo " << i << " (Holding): " << valor_combinado << endl;
-                    read_success = true;
-                }
-            } else {
-                if (modbus_read_input_registers(ctx, SECOND_INPUT_REG, NUM_INPUT_REGISTERS, tab_reg) != -1) {
+                    // Para input registers de 16 bits, trata o sinal se necessário
                     slave_states[i].analog_value = static_cast<int16_t>(tab_reg[0]);
-                    read_success = true;
+                    cout << "Slave " << i << " (Input): " << slave_states[i].analog_value << endl;
                 }
+                read_success = true;
+            } catch (const char* e) {
+                cerr << "Erro na leitura do slave " << i << ": " << e << endl;
             }
 
             if (read_success) {
@@ -204,10 +171,8 @@ int main() {
             modbus_free(ctx);
         }
 
-        // Aplica atualizações DNP3
         UpdateDNP3Values(builder, slave_states);
         outstation->Apply(builder.Build());
-
         this_thread::sleep_for(chrono::seconds(1));
     }
 
