@@ -24,34 +24,34 @@
 using namespace std;
 using namespace opendnp3;
 
-// Definições de constantes para configuração do sistema
-#define NUM_SLAVES 3             // Número de dispositivos Modbus (slaves) a serem monitorados
-#define NUM_HOLDING_REGISTERS 2  // Número de registros holding para leitura (32 bits)
-#define NUM_INPUT_REGISTERS 1    // Número de registros input para leitura (16 bits)
+// Definicoes de constantes para configuracao do sistema
+#define NUM_SLAVES 3             // Numero de dispositivos Modbus (slaves) a serem monitorados
+#define NUM_HOLDING_REGISTERS 2  // Numero de registros holding para leitura (32 bits)
+#define NUM_INPUT_REGISTERS 1    // Numero de registros input para leitura (16 bits)
 
 // Estrutura para armazenar o estado de cada slave Modbus
 struct SlaveState {
-    int32_t analog_value = 0;            // Valor analógico lido do slave
-    bool connection_status = false;       // Status atual da conexão
-    bool last_connection_state = false;   // Último estado da conexão (para detecção de mudanças)
+    int32_t analog_value = 0;            // Valor analogico lido do slave
+    bool connection_status = false;       // Status atual da conexao
+    bool last_connection_state = false;   // Ultimo estado da conexao (para deteccao de mudancas)
     int failure_count = 0;                // Contador de falhas consecutivas
-    const int max_failures_before_zero = 5; // Número máximo de falhas antes de zerar o valor
+    const int max_failures_before_zero = 5; // Numero maximo de falhas antes de zerar o valor
 };
 
-// Configuração do banco de dados DNP3
+// Configuracao do banco de dados DNP3
 DatabaseConfig ConfigureDatabase() {
     DatabaseConfig config;
 
     // Configura os pontos para cada slave
     for(int i = 0; i < NUM_SLAVES; i++) {
-        // Configuração de entradas analógicas
+        // Configuracao de entradas analogicas
         config.analog_input[i] = AnalogConfig();
         config.analog_input[i].clazz = PointClass::Class2;  // Classe do ponto (prioridade)
-        // Variação estática diferente para o primeiro slave
+        // Variacao estatica diferente para o primeiro slave
         config.analog_input[i].svariation = (i == 0) ? StaticAnalogVariation::Group30Var1 
                                                    : StaticAnalogVariation::Group30Var2;
 
-        // Configuração de entradas binárias (status de conexão)
+        // Configuracao de entradas binarias (status de conexao)
         config.binary_input[i] = BinaryConfig();
         config.binary_input[i].clazz = PointClass::Class1;  // Classe de prioridade mais alta
         config.binary_input[i].svariation = StaticBinaryVariation::Group1Var2;
@@ -60,34 +60,34 @@ DatabaseConfig ConfigureDatabase() {
     return config;
 }
 
-// Estrutura de configuração para cada slave Modbus
+// Estrutura de configuracao para cada slave Modbus
 typedef struct {
-    const char* ip;             // Endereço IP do slave
+    const char* ip;             // Endereco IP do slave
     int port;                   // Porta Modbus (normalmente 502)
     int slave_id;               // ID do dispositivo Modbus
     int is_first_slave;         // Flag para identificar o primeiro slave (usa holding registers)
-    int dnp3_analog_index;      // Índice do ponto analógico no DNP3
-    int dnp3_status_index;      // Índice do ponto binário (status) no DNP3
+    int dnp3_analog_index;      // Indice do ponto analogico no DNP3
+    int dnp3_status_index;      // Indice do ponto binario (status) no DNP3
 } SlaveConfig;
 
 // Atualiza os valores no builder DNP3 com base nos estados dos slaves
 void UpdateDNP3Values(UpdateBuilder& builder, const vector<SlaveState>& slave_states) {
     for (size_t i = 0; i < slave_states.size(); i++) {
         const SlaveState& state = slave_states[i];
-        // Atualiza valor analógico (zera após muitas falhas)
+        // Atualiza valor analogico (zera apos muitas falhas)
         builder.Update(Analog((state.failure_count >= state.max_failures_before_zero) ? 0 : state.analog_value), i);
-        // Atualiza status binário (falha de conexão)
+        // Atualiza status binario (falha de conexao)
         bool connection_failed = !state.connection_status;
-        // Sinaliza mudança de estado se necessário
+        // Sinaliza mudanca de estado se necessario
         builder.Update(Binary(connection_failed, (state.connection_status != state.last_connection_state) ? Flags(0x01) : Flags()), i);
     }
 }
 
-// Manipula falhas de comunicação com um slave
+// Manipula falhas de comunicacao com um slave
 void HandleCommunicationFailure(SlaveState& state) {
     state.connection_status = false;
     state.failure_count++;
-    // Zera o valor após muitas falhas consecutivas
+    // Zera o valor apos muitas falhas consecutivas
     if (state.failure_count >= state.max_failures_before_zero) {
         state.analog_value = 0;
     }
@@ -96,7 +96,7 @@ void HandleCommunicationFailure(SlaveState& state) {
 // Converte registros Modbus em um valor inteiro de 32 bits com tratamento de sinal
 int32_t modbusRegistersToInt32(uint16_t* regs, bool is_signed) {
     int32_t value = (regs[0] << 16) | regs[1];
-    // Trata valor negativo se necessário
+    // Trata valor negativo se necessario
     if (is_signed && (value & 0x80000000)) {
         value |= 0xFFFFFFFF00000000; // Estende o sinal para 64 bits
     }
@@ -104,36 +104,36 @@ int32_t modbusRegistersToInt32(uint16_t* regs, bool is_signed) {
 }
 
 int main() {
-    // Configuração inicial do DNP3
+    // Configuracao inicial do DNP3
     const auto logLevels = levels::NORMAL | levels::NOTHING;
     DNP3Manager manager(1, ConsoleLogger::Create());
 
-    // Cria canal TCP para comunicação DNP3
+    // Cria canal TCP para comunicacao DNP3
     auto channel = manager.AddTCPServer("server", logLevels, ServerAcceptMode::CloseExisting,
                                       IPEndpoint("10.1.1.223", 20000),
                                       PrintingChannelListener::Create());
 
-    // Configuração da pilha DNP3
+    // Configuracao da pilha DNP3
     OutstationStackConfig stackConfig(ConfigureDatabase());
     stackConfig.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);  // Buffer de eventos
-    stackConfig.outstation.params.allowUnsolicited = true;  // Permite mensagens não solicitadas
-    stackConfig.link.LocalAddr = 2;    // Endereço local DNP3
-    stackConfig.link.RemoteAddr = 1;   // Endereço remoto DNP3
+    stackConfig.outstation.params.allowUnsolicited = true;  // Permite mensagens nao solicitadas
+    stackConfig.link.LocalAddr = 2;    // Endereco local DNP3
+    stackConfig.link.RemoteAddr = 1;   // Endereco remoto DNP3
 
     // Cria a outstation DNP3
     auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(),
                                            DefaultOutstationApplication::Create(), stackConfig);
     outstation->Enable();  // Habilita a outstation
-	
+
 /*
- * Configuração dos dispositivos Modbus (slaves) que serão monitorados:
- * Cada entrada contém:
+ * Configuracao dos dispositivos Modbus (slaves) que serao monitorados:
+ * Cada entrada contem:
  * 1. IP do dispositivo
  * 2. Porta Modbus (normalmente 502)
  * 3. ID do escravo Modbus
  * 4. Tipo de registro (1 = holding registers, 0 = input registers)
- * 5. Índice do ponto analógico no DNP3
- * 6. Índice do ponto binário (status) no DNP3
+ * 5. Indice do ponto analogico no DNP3
+ * 6. Indice do ponto binario (status) no DNP3
  *
  * O primeiro slave usa holding registers (32 bits) enquanto os demais usam input registers (16 bits)
  */
@@ -152,7 +152,7 @@ int main() {
 
     // Loop principal
     while (true) {
-        UpdateBuilder builder;  // Construtor de atualizações DNP3
+        UpdateBuilder builder;  // Construtor de atualizacoes DNP3
 
         // Itera sobre todos os slaves Modbus
         for (int i = 0; i < NUM_SLAVES; ++i) {
@@ -170,7 +170,7 @@ int main() {
 
             // Tenta conectar ao slave
             if (modbus_connect(ctx) == -1) {
-                cerr << "Falha na conexão com " << slaves[i].ip << endl;
+                cerr << "Falha na conexao com " << slaves[i].ip << endl;
                 modbus_free(ctx);
                 HandleCommunicationFailure(slave_states[i]);
                 continue;
@@ -178,9 +178,9 @@ int main() {
 
             bool read_success = false;
             try {
-                // Lê registros diferentes dependendo se é o primeiro slave ou não
+                // Le registros diferentes dependendo se e o primeiro slave ou nao
                 if (slaves[i].is_first_slave) {
-                    // Lê holding registers (32 bits)
+                    // Le holding registers (32 bits)
                     int rc = modbus_read_registers(ctx, HOLDING_REG_OFFSET, NUM_HOLDING_REGISTERS, tab_reg);
                     if (rc == -1) throw modbus_strerror(errno);
                     
@@ -188,7 +188,7 @@ int main() {
                     slave_states[i].analog_value = modbusRegistersToInt32(tab_reg, true);
                     cout << "Slave " << i << " (Holding): " << slave_states[i].analog_value << endl;
                 } else {
-                    // Lê input registers (16 bits)
+                    // Le input registers (16 bits)
                     int rc = modbus_read_input_registers(ctx, INPUT_REG_OFFSET, NUM_INPUT_REGISTERS, tab_reg);
                     if (rc == -1) throw modbus_strerror(errno);
                     
@@ -201,7 +201,7 @@ int main() {
                 cerr << "Erro na leitura do slave " << i << ": " << e << endl;
             }
 
-            // Atualiza estado da conexão
+            // Atualiza estado da conexao
             if (read_success) {
                 slave_states[i].connection_status = true;
                 slave_states[i].failure_count = 0;
@@ -214,11 +214,11 @@ int main() {
             modbus_free(ctx);
         }
 
-        // Aplica atualizações no DNP3
+        // Aplica atualizacoes no DNP3
         UpdateDNP3Values(builder, slave_states);
         outstation->Apply(builder.Build());
         
-        // Espera 1 segundo antes da próxima iteração
+        // Espera 1 segundo antes da proxima iteracao
         this_thread::sleep_for(chrono::seconds(1));
     }
 
