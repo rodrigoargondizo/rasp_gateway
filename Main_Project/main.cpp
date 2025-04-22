@@ -1,3 +1,4 @@
+// Bibliotecas necessarias para comunicacao DNP3 e Modbus
 #include <opendnp3/ConsoleLogger.h>
 #include <opendnp3/DNP3Manager.h>
 #include <opendnp3/logging/LogLevels.h>
@@ -17,30 +18,34 @@
 using namespace std;
 using namespace opendnp3;
 
+// Estrutura para armazenar o estado da aplicacao
 struct State {
-    int16_t analog = 0;
-    bool led_status = 0;
-    bool button_status = 0;
-    int16_t last_valid_value = 0;
-    const int COIL_LIGAR = 0;
-    const int COIL_DESLIGAR = 1;
-    const int COIL_STATUS_LED = 2;
-    const int COIL_STATUS_BUTTON = 3;
+    int16_t analog = 0;                     // Valor analogico de entrada
+    bool led_status = 0;                     // Estado do LED
+    bool button_status = 0;                  // Estado do botao
+    int16_t last_valid_value = 0;            // Ultimo valor analogico valido
+    const int COIL_LIGAR = 0;                // Endereco da bobina para ligar
+    const int COIL_DESLIGAR = 1;             // Endereco da bobina para desligar
+    const int COIL_STATUS_LED = 2;           // Endereco da bobina do LED
+    const int COIL_STATUS_BUTTON = 3;        // Endereco da bobina do botao
         
-    bool modbus_connected = false;
-    bool last_connection_state = false;
-    int failure_count = 0;
-    const int max_failures_before_zero = 5;
+    bool modbus_connected = false;           // Status da conexao Modbus
+    bool last_connection_state = false;      // Estado anterior da conexao
+    int failure_count = 0;                   // Contador de falhas consecutivas
+    const int max_failures_before_zero = 5;  // Maximo de falhas antes de enviar zero
 };
 
+// Configura os pontos da base de dados DNP3
 DatabaseConfig ConfigureDatabase()
 {
     DatabaseConfig config;
 
+    // Configura ponto analogico de entrada
     config.analog_input[0] = AnalogConfig();
     config.analog_input[0].clazz = PointClass::Class2;
     config.analog_input[0].svariation = StaticAnalogVariation::Group30Var2;
 
+    // Configura pontos binarios de entrada
     config.binary_input[0] = BinaryConfig();
     config.binary_input[0].clazz = PointClass::Class1;
     config.binary_input[0].svariation = StaticBinaryVariation::Group1Var2;
@@ -56,33 +61,41 @@ DatabaseConfig ConfigureDatabase()
     return config;
 }
 
+// Adiciona atualizacoes ao outstation DNP3
 void AddUpdates(UpdateBuilder& builder, State& state) {
+    // Atualiza valor analogico
     if (state.failure_count >= state.max_failures_before_zero) {
         builder.Update(Analog(0), 0);
     } else {
         builder.Update(Analog(state.last_valid_value), 0);
     }
     
+    // Atualiza status da conexao
     bool connection_failed = !state.modbus_connected;
     builder.Update(Binary(connection_failed), 0);
     
+    // Atualiza flag de status se houve mudanca
     if (state.modbus_connected != state.last_connection_state) {
         builder.Update(Binary(connection_failed, Flags(0x01)), 0);
         state.last_connection_state = state.modbus_connected;
     }
 
+    // Atualiza entradas binarias
     builder.Update(Binary(state.led_status), 1);
     builder.Update(Binary(state.button_status), 2);
 }
 
+// Tenta reconectar ao dispositivo Modbus
 bool TryModbusReconnect(modbus_t* ctx, const char* ip, int port, int slave_id, State& state) {
     cout << "Tentando reconectar ao Modbus..." << endl;
     
+    // Fecha conexao existente se houver
     if (state.modbus_connected) {
         modbus_close(ctx);
         state.modbus_connected = false;
     }
 
+    // Cria novo contexto se necessario
     if (ctx == nullptr) {
         ctx = modbus_new_tcp(ip, port);
         if (ctx == nullptr) {
@@ -93,12 +106,14 @@ bool TryModbusReconnect(modbus_t* ctx, const char* ip, int port, int slave_id, S
         modbus_set_byte_timeout(ctx, 1, 0);
     }
 
+    // Configura ID do escravo
     if (modbus_set_slave(ctx, slave_id) == -1) {
         cerr << "Erro ao configurar ID do escravo: " << modbus_strerror(errno) << endl;
         modbus_free(ctx);
         return false;
     }
 
+    // Tenta conexao
     if (modbus_connect(ctx) == -1) {
         cerr << "Falha na reconexao: " << modbus_strerror(errno) << endl;
         return false;
@@ -109,10 +124,12 @@ bool TryModbusReconnect(modbus_t* ctx, const char* ip, int port, int slave_id, S
     return true;
 }
 
+// Le valores do dispositivo Modbus
 bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, State& state) {
     uint16_t tab_reg[1];
     uint8_t led_status, button_status;
     
+    // Tenta reconectar se nao estiver conectado
     if (!state.modbus_connected) {
         if (!TryModbusReconnect(ctx, ip, port, slave_id, state)) {
             state.failure_count++;
@@ -120,6 +137,7 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
         }
     }
 
+    // Le registro analogico
     modbus_flush(ctx);
     int rc = modbus_read_registers(ctx, 0, 1, tab_reg);
     
@@ -131,6 +149,7 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
         return false;
     }
 
+    // Le status do LED
     rc = modbus_read_bits(ctx, state.COIL_STATUS_LED, 1, &led_status);
     
     if (rc == -1) {
@@ -141,6 +160,7 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
         return false;
     }
 
+    // Le status do botao
     rc = modbus_read_bits(ctx, state.COIL_STATUS_BUTTON, 1, &button_status);
     
     if (rc == -1) {
@@ -151,6 +171,7 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
         return false;
     }
 
+    // Atualiza estado com novos valores
     state.analog = static_cast<int16_t>(tab_reg[0]);
     state.last_valid_value = state.analog;
     state.led_status = (led_status == 1);
@@ -159,12 +180,15 @@ bool ReadModbusValues(modbus_t* ctx, const char* ip, int port, int slave_id, Sta
     return true;
 }
 
+// Flag para tratamento de sinal
 volatile sig_atomic_t shutdown_flag = 0;
 
+// Funcao para tratamento de sinal
 void signal_handler(int signal) {
     shutdown_flag = 1;
 }
 
+// Liga dispositivo via Modbus
 bool LigarDispositivo(modbus_t* ctx, const State& state) {
     if (modbus_write_bit(ctx, state.COIL_LIGAR, true) == -1) {
         std::cerr << "Erro ao ligar: " << modbus_strerror(errno) << std::endl;
@@ -174,6 +198,7 @@ bool LigarDispositivo(modbus_t* ctx, const State& state) {
     return true;
 }
 
+// Desliga dispositivo via Modbus
 bool DesligarDispositivo(modbus_t* ctx, const State& state) {
     if (modbus_write_bit(ctx, state.COIL_DESLIGAR, true) == -1) {
         std::cerr << "Erro ao desligar: " << modbus_strerror(errno) << std::endl;
@@ -183,6 +208,7 @@ bool DesligarDispositivo(modbus_t* ctx, const State& state) {
     return true;
 }
 
+// Manipulador de comandos personalizado para DNP3
 class DirectOperateOnlyHandler : public SimpleCommandHandler {
 private:
     modbus_t* ctx;
@@ -194,6 +220,7 @@ public:
           ctx(modbus_ctx),
           state(initialState) {}
 
+    // Manipula comandos de controle
     CommandStatus Operate(const ControlRelayOutputBlock& command, 
                           uint16_t index,
                           IUpdateHandler& handler,
@@ -219,16 +246,19 @@ public:
 };
 
 int main() {
-
+    // Configura handlers de sinal
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    // Parametros de conexao Modbus
     const char* modbus_ip = "192.168.100.120";
     const int modbus_port = 502;
     const int modbus_slave_id = 1;
 
+    // Cria contexto Modbus
     modbus_t* ctx = modbus_new_tcp(modbus_ip, modbus_port);
 
+    // Tenta conexao inicial
     while (!shutdown_flag) {
         if (modbus_connect(ctx) == -1) {
             std::cerr << "Erro ao conectar ao dispositivo: " << modbus_strerror(errno) << std::endl;
@@ -241,6 +271,7 @@ int main() {
         }
     }
 
+    // Configura ID do escravo Modbus
     if (modbus_set_slave(ctx, 1) == -1)
     {
         std::cerr << "Erro ao configurar ID do escravo: " << modbus_strerror(errno) << std::endl;
@@ -248,6 +279,7 @@ int main() {
         return -1;
     }
 
+    // Verifica conexao
     if (modbus_connect(ctx) == -1)
     {
         std::cerr << "Erro ao conectar ao dispositivo: " << modbus_strerror(errno) << std::endl;
@@ -255,12 +287,16 @@ int main() {
         return -1;
     }
     
+    // Inicializa estado da aplicacao
     State state;
 
+    // Configura niveis de log DNP3
     const auto logLevels = levels::NORMAL | levels::NOTHING;
 
+    // Cria gerenciador DNP3
     DNP3Manager manager(1, ConsoleLogger::Create());
 
+    // Configura canal DNP3
     auto channel = std::shared_ptr<IChannel>(nullptr);
     try
     {
@@ -273,6 +309,7 @@ int main() {
         return -1;
     }
 
+    // Configura stack DNP3 outstation
     OutstationStackConfig config(ConfigureDatabase());
 
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
@@ -284,6 +321,7 @@ int main() {
     
     config.link.KeepAliveTimeout = TimeDuration::Seconds(30);
 
+    // Cria instancia outstation
     auto outstation = channel->AddOutstation(
         "outstation", 
         std::make_shared<DirectOperateOnlyHandler>(ctx, state), 
@@ -293,14 +331,17 @@ int main() {
 
     outstation->Enable();
 
+    // Loop principal da aplicacao
     while (!shutdown_flag) {
-
+        // Le valores do Modbus
         bool read_success = ReadModbusValues(ctx, modbus_ip, modbus_port, modbus_slave_id, state);
 
+        // Atualiza pontos DNP3
         UpdateBuilder builder;
         AddUpdates(builder, state);
         outstation->Apply(builder.Build());
 
+        // Log de status
         if (!read_success) {
             if (state.failure_count >= state.max_failures_before_zero) {
                 cout << "Falha prolongada - Enviando 0 (Status: FALHA)" << endl;
@@ -316,6 +357,7 @@ int main() {
         this_thread::sleep_for(chrono::seconds(1));
     }
 
+    // Limpeza da conexao Modbus
     if (state.modbus_connected) {
         modbus_close(ctx);
     }
